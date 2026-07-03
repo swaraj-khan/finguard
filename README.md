@@ -1,11 +1,6 @@
 # Finguard
 
-Password-protected FastAPI service with two endpoints:
-
-1. **`POST /upload_doc`** — upload an original document (max 2 MB). The file is stored in a public Supabase Storage bucket and its link + metadata are recorded in the `upload_doc` table.
-2. **`POST /analyzed_doc`** — upload the analyzed version (a file) of a previously uploaded document. It is stored in the same bucket and recorded in the `analyzed_doc` table, linked to the original via a foreign key.
-
-Both endpoints require the password in the `X-API-Password` header (default `Finguard123`).
+Password-protected FastAPI service that uploads one or more PDFs to a public Supabase Storage bucket and lists them back.
 
 ## Setup
 
@@ -19,10 +14,11 @@ pip install -r requirements.txt
 
 Copy `.env.example` to `.env` and fill in `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
 
-### Database + bucket (one-time)
+Create the storage bucket once:
 
-1. **Tables** — Supabase dashboard → SQL Editor → run `schema.sql` (fresh project) or `migration_storage.sql` (upgrading an older base64 `documents` table).
-2. **Bucket** — `.venv\Scripts\python setup_storage.py`
+```bash
+.venv\Scripts\python setup_storage.py
+```
 
 ## Run
 
@@ -30,56 +26,51 @@ Copy `.env.example` to `.env` and fill in `SUPABASE_URL` and `SUPABASE_SERVICE_R
 .venv\Scripts\uvicorn app.main:app --reload
 ```
 
-- Swagger UI: http://127.0.0.1:8000/docs
-- Health: http://127.0.0.1:8000/health
+Swagger UI: http://127.0.0.1:8000/docs
 
 ## Usage
 
-### Upload an original document
+`POST /upload` — send one or more PDFs (max 2 MB each) in the `files` field, with the password in the `X-API-Password` header.
 
 ```bash
-curl -X POST http://127.0.0.1:8000/upload_doc \
+curl -X POST http://127.0.0.1:8000/upload \
   -H "X-API-Password: Finguard123" \
-  -F "file=@document.pdf"
+  -F "files=@report1.pdf" \
+  -F "files=@report2.pdf"
 ```
 
 ```json
 {
-  "id": "b1e6...",
-  "filename": "document.pdf",
-  "content_type": "application/pdf",
-  "size_bytes": 12345,
-  "file_url": "https://<ref>.supabase.co/storage/v1/object/public/documents/<uuid>/document.pdf",
-  "storage_path": "<uuid>/document.pdf",
-  "uploaded_at": "2026-07-01T09:00:00+00:00"
+  "count": 2,
+  "files": [
+    {"filename": "report1.pdf", "size_bytes": 12345, "file_url": "https://<ref>.supabase.co/storage/v1/object/public/documents/uploaded_docs/<uuid>/report1.pdf"},
+    {"filename": "report2.pdf", "size_bytes": 24680, "file_url": "https://<ref>.supabase.co/storage/v1/object/public/documents/uploaded_docs/<uuid>/report2.pdf"}
+  ]
 }
 ```
 
-### Upload its analyzed version
+If any file is not a PDF or is too large, the whole request is rejected and nothing is uploaded.
 
-Pass the `id` from the response above as `upload_doc_id`:
+### List uploaded files
+
+`GET /files` — returns every file in the bucket with its public URL, newest first.
 
 ```bash
-curl -X POST http://127.0.0.1:8000/analyzed_doc \
-  -H "X-API-Password: Finguard123" \
-  -F "upload_doc_id=b1e6..." \
-  -F "file=@analyzed.pdf"
+curl http://127.0.0.1:8000/files -H "X-API-Password: Finguard123"
 ```
 
 ```json
 {
-  "id": "9f2c...",
-  "upload_doc_id": "b1e6...",
-  "filename": "analyzed.pdf",
-  "content_type": "application/pdf",
-  "size_bytes": 20480,
-  "file_url": "https://<ref>.supabase.co/storage/v1/object/public/documents/analyzed/<uuid>/analyzed.pdf",
-  "storage_path": "analyzed/<uuid>/analyzed.pdf",
-  "created_at": "2026-07-01T09:05:00+00:00"
+  "count": 2,
+  "files": [
+    {"filename": "report1.pdf", "path": "uploaded_docs/<uuid>/report1.pdf", "size_bytes": 12345, "uploaded_at": "2026-07-03T10:00:00Z", "file_url": "https://<ref>.supabase.co/storage/v1/object/public/documents/uploaded_docs/<uuid>/report1.pdf"}
+  ]
 }
 ```
 
-Status codes: `201` created, `401` bad/missing password, `413` file over 2 MB, `422` invalid body, `404` unknown `upload_doc_id`.
+Open a `file_url` in a browser to view the PDF.
+
+Status codes: `201` created, `401` bad/missing password, `400` non-PDF or empty file, `413` file over 2 MB, `422` no files.
 
 ## Project layout
 
@@ -88,10 +79,8 @@ app/
   config.py     env + settings
   db.py         cached Supabase client
   storage.py    bucket + file upload
-  main.py       FastAPI app and endpoints
-schema.sql             fresh database setup
-migration_storage.sql  upgrade an older base64 table
-setup_storage.py       create the public bucket
+  main.py       FastAPI app: /upload and /files
+setup_storage.py  create the public bucket
 ```
 
 ## Security notes
