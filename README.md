@@ -1,6 +1,6 @@
 # Finguard
 
-Password-protected FastAPI service that uploads one or more PDFs to a public Supabase Storage bucket and lists them back.
+Password-protected FastAPI service for storing arbitrary Base64 data in private Supabase Storage. Uploads return a document ID, and that ID can later retrieve the original Base64 value.
 
 ## Setup
 
@@ -12,13 +12,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Copy `.env.example` to `.env` and fill in `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
-
-Create the storage bucket once:
-
-```bash
-.venv\Scripts\python setup_storage.py
-```
+Copy `.env.example` to `.env` and fill in `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. The configured Supabase Storage bucket must exist and should be private.
 
 ## Run
 
@@ -28,62 +22,62 @@ Create the storage bucket once:
 
 Swagger UI: http://127.0.0.1:8000/docs
 
-## Usage
+## Base64 contract
 
-`POST /upload` — send one or more PDFs (max 2 MB each) in the `files` field, with the password in the `X-API-Password` header.
+- Encoding is standard Base64 with padding.
+- Send only the encoded string. Do not add quotes, JSON, whitespace, or a `data:...;base64,` prefix.
+- Any decoded content is accepted; it does not need to be a PDF.
+- The 2 MB limit applies to the decoded bytes.
+- One Base64 value is accepted per request.
+
+### Upload Base64 data
+
+`POST /upload` accepts a pasteable `text/plain` Base64 string and returns its generated document ID.
 
 ```bash
 curl -X POST http://127.0.0.1:8000/upload \
   -H "X-API-Password: Finguard123" \
-  -F "files=@report1.pdf" \
-  -F "files=@report2.pdf"
+  -H "Content-Type: text/plain" \
+  --data-binary "SGVsbG8sIFdvcmxkIQ=="
 ```
+
+Response (`201 Created`):
 
 ```json
 {
-  "count": 2,
-  "files": [
-    {"filename": "report1.pdf", "size_bytes": 12345, "file_url": "https://<ref>.supabase.co/storage/v1/object/public/documents/uploaded_docs/<uuid>/report1.pdf"},
-    {"filename": "report2.pdf", "size_bytes": 24680, "file_url": "https://<ref>.supabase.co/storage/v1/object/public/documents/uploaded_docs/<uuid>/report2.pdf"}
-  ]
+  "document_id": "b99ccf84-21dd-4e4c-90de-e11c4f915a1f"
 }
 ```
 
-If any file is not a PDF or is too large, the whole request is rejected and nothing is uploaded.
+### Retrieve a specific document
 
-### List uploaded files
-
-`GET /files` — returns every file in the bucket with its public URL, newest first.
+`GET /files/{document_id}` returns the stored value as a pure Base64 `text/plain` response.
 
 ```bash
-curl http://127.0.0.1:8000/files -H "X-API-Password: Finguard123"
+curl http://127.0.0.1:8000/files/b99ccf84-21dd-4e4c-90de-e11c4f915a1f \
+  -H "X-API-Password: Finguard123"
 ```
 
-```json
-{
-  "count": 2,
-  "files": [
-    {"filename": "report1.pdf", "path": "uploaded_docs/<uuid>/report1.pdf", "size_bytes": 12345, "uploaded_at": "2026-07-03T10:00:00Z", "file_url": "https://<ref>.supabase.co/storage/v1/object/public/documents/uploaded_docs/<uuid>/report1.pdf"}
-  ]
-}
+Response (`200 OK`):
+
+```text
+SGVsbG8sIFdvcmxkIQ==
 ```
 
-Open a `file_url` in a browser to view the PDF.
-
-Status codes: `201` created, `401` bad/missing password, `400` non-PDF or empty file, `413` file over 2 MB, `422` no files.
+Status codes: `201` created, `200` retrieved, `401` bad/missing password, `400` invalid or empty Base64, `404` unknown document ID, `413` decoded data over 2 MB, `422` missing body or invalid document ID, and `502` storage failure.
 
 ## Project layout
 
-```
+```text
 app/
-  config.py     env + settings
-  db.py         cached Supabase client
-  storage.py    bucket + file upload
-  main.py       FastAPI app: /upload and /files
-setup_storage.py  create the public bucket
+  config.py   environment settings
+  db.py       cached Supabase client
+  storage.py  private upload and ID-based download operations
+  main.py     Base64 validation and API routes
 ```
 
 ## Security notes
 
-- The storage bucket is public: anyone with a `file_url` can open that file.
-- The `service_role` key bypasses RLS. It lives only in `.env` (gitignored) and is used server-side. Since it was shared in plaintext, rotate it (Supabase → Settings → API) before production.
+- Keep the storage bucket private.
+- The `service_role` key bypasses RLS. Keep it only in `.env`, which is gitignored.
+- Base64 is an encoding, not encryption. Anyone who receives a Base64 response can decode its content.

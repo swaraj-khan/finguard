@@ -1,14 +1,14 @@
-import os
-import re
 import uuid
 
 from . import config
 from .db import get_supabase
 
+_DOCUMENT_FILENAME = "document.bin"
+
 
 def ensure_bucket() -> None:
     client = get_supabase()
-    options = {"public": True, "file_size_limit": config.MAX_FILE_SIZE}
+    options = {"public": False, "file_size_limit": config.MAX_FILE_SIZE}
     try:
         client.storage.create_bucket(config.STORAGE_BUCKET, options=options)
     except Exception as exc:
@@ -18,58 +18,25 @@ def ensure_bucket() -> None:
             raise
 
 
-def _make_object_key(filename: str | None, prefix: str = "") -> str:
-    base = os.path.basename(filename or "file")
-    safe = re.sub(r"[^A-Za-z0-9._-]", "_", base) or "file"
+def _document_key(document_id: str, prefix: str = "") -> str:
     folder = f"{prefix.strip('/')}/" if prefix else ""
-    return f"{folder}{uuid.uuid4()}/{safe}"
+    return f"{folder}{document_id}/{_DOCUMENT_FILENAME}"
 
 
-def upload_file(
-    contents: bytes, filename: str | None, content_type: str | None, prefix: str = ""
-) -> tuple[str, str]:
-    client = get_supabase()
-    key = _make_object_key(filename, prefix)
-    client.storage.from_(config.STORAGE_BUCKET).upload(
+def upload_document(contents: bytes, prefix: str = "") -> str:
+    document_id = str(uuid.uuid4())
+    key = _document_key(document_id, prefix)
+    get_supabase().storage.from_(config.STORAGE_BUCKET).upload(
         path=key,
         file=contents,
-        file_options={"content-type": content_type or "application/octet-stream", "upsert": "false"},
+        file_options={"content-type": "application/octet-stream", "upsert": "false"},
     )
-    public_url = client.storage.from_(config.STORAGE_BUCKET).get_public_url(key)
-    return key, public_url.rstrip("?")
+    return document_id
 
 
-def remove_files(keys: list[str]) -> None:
-    if keys:
-        get_supabase().storage.from_(config.STORAGE_BUCKET).remove(keys)
-
-
-def _file_info(bucket, key: str, obj: dict) -> dict:
-    meta = obj.get("metadata") or {}
-    return {
-        "filename": obj.get("name"),
-        "path": key,
-        "file_url": bucket.get_public_url(key).rstrip("?"),
-        "size_bytes": meta.get("size"),
-        "uploaded_at": obj.get("created_at"),
-    }
-
-
-def _walk(bucket, prefix: str, out: list) -> None:
-    for entry in bucket.list(prefix, {"limit": 1000}):
-        name = entry.get("name")
-        if not name or name == ".emptyFolderPlaceholder":
-            continue
-        key = f"{prefix}/{name}" if prefix else name
-        if entry.get("id") is None:
-            _walk(bucket, key, out)
-        else:
-            out.append(_file_info(bucket, key, entry))
-
-
-def list_files() -> list[dict]:
+def get_document(document_id: str, prefix: str = "") -> bytes | None:
+    key = _document_key(document_id, prefix)
     bucket = get_supabase().storage.from_(config.STORAGE_BUCKET)
-    files: list[dict] = []
-    _walk(bucket, "", files)
-    files.sort(key=lambda f: f.get("uploaded_at") or "", reverse=True)
-    return files
+    if not bucket.exists(key):
+        return None
+    return bucket.download(key)
