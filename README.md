@@ -48,7 +48,7 @@ All examples below use `https://finguard-81qn.onrender.com` as the base URL.
 ### 1. Government uploads a raw document
 
 ```bash
-curl -X POST "https://finguard-81qn.onrender.com/govt/documents" \
+curl -X POST "https://finguard-81qn.onrender.com/govt/documents?bill_number=123&document_name=abc456" \
   -H "X-API-Password: GOVERNMENT_PASSWORD" \
   -H "Content-Type: text/plain" \
   --data-binary "SGVsbG8sIFdvcmxkIQ=="
@@ -58,11 +58,14 @@ Response:
 
 ```json
 {
-  "document_id": "b99ccf84-21dd-4e4c-90de-e11c4f915a1f"
+  "document_id": "b99ccf84-21dd-4e4c-90de-e11c4f915a1f",
+  "reference": "123/abc456"
 }
 ```
 
-The government team must retain this ID. The raw bytes are stored at `uploaded_docs/b99ccf84-21dd-4e4c-90de-e11c4f915a1f/document.bin`.
+`bill_number` must be a non-negative integer. `document_name` can contain up to 255 characters but cannot contain `/`, `\`, or control characters. Leading and trailing whitespace is removed.
+
+The government team must retain the UUID to retrieve the matching analyzed document. `reference` is the human-facing bill/document identifier. The raw bytes are stored at `uploaded_docs/b99ccf84-21dd-4e4c-90de-e11c4f915a1f/document.bin`, with the bill number, document name, and reference saved as object metadata.
 
 The government team can also list all of its uploaded document IDs:
 
@@ -145,7 +148,7 @@ Until Finguard uploads the matching analyzed version, this endpoint returns `404
 
 | Team | Method | Endpoint | Purpose |
 |---|---|---|---|
-| Government | `POST` | `/govt/documents` | Upload raw Base64 and receive an ID |
+| Government | `POST` | `/govt/documents?bill_number={number}&document_name={name}` | Upload raw Base64 and receive an ID and reference |
 | Government | `GET` | `/govt/documents` | List every uploaded raw document ID |
 | Government | `GET` | `/govt/documents/{id}/analyzed` | Retrieve the matching analyzed Base64 |
 | Finguard | `GET` | `/finguard/documents/pending` | List raw IDs without analyzed responses |

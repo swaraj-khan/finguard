@@ -4,7 +4,7 @@ import secrets
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Body, Depends, FastAPI, HTTPException, Security, status
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Security, status
 from fastapi.responses import PlainTextResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
@@ -27,6 +27,10 @@ _finguard_password_header = APIKeyHeader(
 
 class DocumentIdResponse(BaseModel):
     document_id: UUID
+
+
+class GovernmentUploadResponse(DocumentIdResponse):
+    reference: str
 
 
 def _require_team_password(password: str | None, expected: str, team: str) -> None:
@@ -82,6 +86,26 @@ def _encode(contents: bytes) -> str:
     return base64.b64encode(contents).decode("ascii")
 
 
+def _build_reference(bill_number: int, document_name: str) -> tuple[str, str]:
+    normalized_name = document_name.strip()
+    if not normalized_name:
+        raise HTTPException(
+            status_code=422,
+            detail="The document name cannot be blank.",
+        )
+    if "/" in normalized_name or "\\" in normalized_name:
+        raise HTTPException(
+            status_code=422,
+            detail="The document name cannot contain '/' or '\\'.",
+        )
+    if any(ord(character) < 32 for character in normalized_name):
+        raise HTTPException(
+            status_code=422,
+            detail="The document name cannot contain control characters.",
+        )
+    return normalized_name, f"{bill_number}/{normalized_name}"
+
+
 def _get_document(document_id: UUID, prefix: str, version: str) -> bytes:
     try:
         contents = storage.get_document(str(document_id), prefix=prefix)
@@ -127,10 +151,18 @@ def _base64_body(description: str) -> dict:
 @app.post(
     "/govt/documents",
     status_code=status.HTTP_201_CREATED,
-    response_model=DocumentIdResponse,
+    response_model=GovernmentUploadResponse,
     tags=["Government"],
 )
 def upload_raw_document(
+    bill_number: Annotated[
+        int,
+        Query(ge=0, description="The government bill number."),
+    ],
+    document_name: Annotated[
+        str,
+        Query(min_length=1, max_length=255, description="The document name used in the reference."),
+    ],
     payload: Annotated[
         str,
         Body(
@@ -139,16 +171,25 @@ def upload_raw_document(
         ),
     ],
     _: None = Depends(require_govt_password),
-) -> DocumentIdResponse:
+) -> GovernmentUploadResponse:
+    normalized_name, reference = _build_reference(bill_number, document_name)
     contents = _decode_payload(payload)
     try:
-        document_id = storage.create_document(contents, prefix=config.UPLOAD_PREFIX)
+        document_id = storage.create_document(
+            contents,
+            prefix=config.UPLOAD_PREFIX,
+            metadata={
+                "bill_number": bill_number,
+                "document_name": normalized_name,
+                "reference": reference,
+            },
+        )
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to upload the raw document: {exc}",
         ) from exc
-    return DocumentIdResponse(document_id=document_id)
+    return GovernmentUploadResponse(document_id=document_id, reference=reference)
 
 
 @app.get(

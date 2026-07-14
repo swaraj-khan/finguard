@@ -23,18 +23,26 @@ def _document_key(document_id: str, prefix: str) -> str:
     return f"{prefix.strip('/')}/{document_id}/{_DOCUMENT_FILENAME}"
 
 
-def store_document(contents: bytes, document_id: str, prefix: str) -> None:
+def store_document(
+    contents: bytes,
+    document_id: str,
+    prefix: str,
+    metadata: dict | None = None,
+) -> None:
     key = _document_key(document_id, prefix)
+    file_options = {"content-type": "application/octet-stream", "upsert": "false"}
+    if metadata:
+        file_options["metadata"] = metadata
     get_supabase().storage.from_(config.STORAGE_BUCKET).upload(
         path=key,
         file=contents,
-        file_options={"content-type": "application/octet-stream", "upsert": "false"},
+        file_options=file_options,
     )
 
 
-def create_document(contents: bytes, prefix: str) -> str:
+def create_document(contents: bytes, prefix: str, metadata: dict | None = None) -> str:
     document_id = str(uuid.uuid4())
-    store_document(contents, document_id, prefix)
+    store_document(contents, document_id, prefix, metadata=metadata)
     return document_id
 
 
