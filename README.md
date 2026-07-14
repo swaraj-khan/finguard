@@ -1,47 +1,60 @@
 # Finguard
 
-Password-protected FastAPI service for storing arbitrary Base64 data in private Supabase Storage. Uploads return a document ID, and that ID can later retrieve the original Base64 value.
+Password-protected Base64 document handoff API for two teams:
+
+- The government team uploads raw documents.
+- The Finguard team retrieves pending raw documents, preprocesses them, and uploads analyzed versions.
+- The government team retrieves the analyzed version using the original document ID.
+
+Both versions share one UUID, so an analyzed document cannot be confused with another raw document:
+
+```text
+documents bucket
+├── uploaded_docs/{document_id}/document.bin   raw government upload
+└── response_docs/{document_id}/document.bin   matching Finguard response
+```
 
 ## Setup
 
 ```bash
 python -m venv .venv
-.venv\Scripts\activate          # Windows
-# source .venv/bin/activate     # macOS/Linux
-
+.venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Copy `.env.example` to `.env` and fill in `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. The configured Supabase Storage bucket must exist and should be private.
+Copy `.env.example` to `.env` and configure the Supabase credentials and two different team passwords. The `documents` bucket must exist and should be private.
 
-## Run
+For Render, configure the same values under **Environment** and use:
 
-```bash
-.venv\Scripts\uvicorn app.main:app --reload
+```text
+uvicorn app.main:app --host 0.0.0.0 --port $PORT
 ```
 
-Swagger UI: http://127.0.0.1:8000/docs
+Local Swagger UI: http://127.0.0.1:8000/docs
+
+Deployed Swagger UI: https://finguard-81qn.onrender.com/docs
 
 ## Base64 contract
 
-- Encoding is standard Base64 with padding.
-- Send only the encoded string. Do not add quotes, JSON, whitespace, or a `data:...;base64,` prefix.
+- Request document bodies use `text/plain` and contain only standard Base64.
+- Do not add quotes, JSON, whitespace, or a `data:...;base64,` prefix.
 - Any decoded content is accepted; it does not need to be a PDF.
-- The 2 MB limit applies to the decoded bytes.
-- One Base64 value is accepted per request.
+- The 2 MB limit applies to decoded bytes.
 
-### Upload Base64 data
+## Workflow
 
-`POST /upload` accepts a pasteable `text/plain` Base64 string and returns its generated document ID.
+All examples below use `https://finguard-81qn.onrender.com` as the base URL.
+
+### 1. Government uploads a raw document
 
 ```bash
-curl -X POST http://127.0.0.1:8000/upload \
-  -H "X-API-Password: Finguard123" \
+curl -X POST "https://finguard-81qn.onrender.com/govt/documents" \
+  -H "X-API-Password: GOVERNMENT_PASSWORD" \
   -H "Content-Type: text/plain" \
   --data-binary "SGVsbG8sIFdvcmxkIQ=="
 ```
 
-Response (`201 Created`):
+Response:
 
 ```json
 {
@@ -49,53 +62,99 @@ Response (`201 Created`):
 }
 ```
 
-### List all document IDs
+The government team must retain this ID. The raw bytes are stored at `uploaded_docs/b99ccf84-21dd-4e4c-90de-e11c4f915a1f/document.bin`.
 
-`GET /files` returns every stored document ID as a JSON array.
+The government team can also list all of its uploaded document IDs:
 
 ```bash
-curl http://127.0.0.1:8000/files \
-  -H "X-API-Password: Finguard123"
+curl "https://finguard-81qn.onrender.com/govt/documents" \
+  -H "X-API-Password: GOVERNMENT_PASSWORD"
 ```
 
-Response (`200 OK`):
+### 2. Finguard lists documents awaiting analysis
+
+```bash
+curl "https://finguard-81qn.onrender.com/finguard/documents/pending" \
+  -H "X-API-Password: FINGUARD_PASSWORD"
+```
+
+Response:
 
 ```json
 [
-  "34ebbd85-774a-4547-84d7-44f2e8848e9e",
   "b99ccf84-21dd-4e4c-90de-e11c4f915a1f"
 ]
 ```
 
-### Retrieve a specific document
+An ID disappears from this list after its analyzed version is uploaded.
 
-`GET /files/{document_id}` returns the stored value as a pure Base64 `text/plain` response.
+### 3. Finguard retrieves one raw document
 
 ```bash
-curl http://127.0.0.1:8000/files/b99ccf84-21dd-4e4c-90de-e11c4f915a1f \
-  -H "X-API-Password: Finguard123"
+curl "https://finguard-81qn.onrender.com/finguard/documents/b99ccf84-21dd-4e4c-90de-e11c4f915a1f/raw" \
+  -H "X-API-Password: FINGUARD_PASSWORD"
 ```
 
-Response (`200 OK`):
+Response body:
 
 ```text
 SGVsbG8sIFdvcmxkIQ==
 ```
 
-Status codes: `201` created, `200` retrieved, `401` bad/missing password, `400` invalid or empty Base64, `404` unknown document ID, `413` decoded data over 2 MB, `422` missing body or invalid document ID, and `502` storage failure.
+### 4. Finguard uploads the analyzed version
 
-## Project layout
+Finguard uses the same ID from the raw document:
+
+```bash
+curl -X POST "https://finguard-81qn.onrender.com/finguard/documents/b99ccf84-21dd-4e4c-90de-e11c4f915a1f/analyzed" \
+  -H "X-API-Password: FINGUARD_PASSWORD" \
+  -H "Content-Type: text/plain" \
+  --data-binary "UFJFUFJPQ0VTU0VEX0RPQ1VNRU5U"
+```
+
+Response:
+
+```json
+{
+  "document_id": "b99ccf84-21dd-4e4c-90de-e11c4f915a1f"
+}
+```
+
+The response is stored at `response_docs/b99ccf84-21dd-4e4c-90de-e11c4f915a1f/document.bin`.
+
+The API returns `404` if Finguard uses an ID that has no matching raw document and `409` if an analyzed version already exists.
+
+### 5. Government retrieves the correct analyzed document
+
+The government team calls the analyzed endpoint with the same ID received in step 1:
+
+```bash
+curl "https://finguard-81qn.onrender.com/govt/documents/b99ccf84-21dd-4e4c-90de-e11c4f915a1f/analyzed" \
+  -H "X-API-Password: GOVERNMENT_PASSWORD"
+```
+
+Response body:
 
 ```text
-app/
-  config.py   environment settings
-  db.py       cached Supabase client
-  storage.py  private upload and ID-based download operations
-  main.py     Base64 validation and API routes
+UFJFUFJPQ0VTU0VEX0RPQ1VNRU5U
 ```
+
+Until Finguard uploads the matching analyzed version, this endpoint returns `404`.
+
+## Endpoint summary
+
+| Team | Method | Endpoint | Purpose |
+|---|---|---|---|
+| Government | `POST` | `/govt/documents` | Upload raw Base64 and receive an ID |
+| Government | `GET` | `/govt/documents` | List every uploaded raw document ID |
+| Government | `GET` | `/govt/documents/{id}/analyzed` | Retrieve the matching analyzed Base64 |
+| Finguard | `GET` | `/finguard/documents/pending` | List raw IDs without analyzed responses |
+| Finguard | `GET` | `/finguard/documents/{id}/raw` | Retrieve one raw Base64 document |
+| Finguard | `POST` | `/finguard/documents/{id}/analyzed` | Store analyzed Base64 under the same ID |
 
 ## Security notes
 
-- Keep the storage bucket private.
-- The `service_role` key bypasses RLS. Keep it only in `.env`, which is gitignored.
-- Base64 is an encoding, not encryption. Anyone who receives a Base64 response can decode its content.
+- Set different `GOVT_API_PASSWORD` and `FINGUARD_API_PASSWORD` values in production.
+- Keep the Supabase bucket private.
+- Keep `SUPABASE_SERVICE_ROLE_KEY` secret; it bypasses RLS.
+- Base64 is encoding, not encryption.

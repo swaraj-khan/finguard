@@ -4,11 +4,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-API_PASSWORD = os.getenv("API_PASSWORD", "Finguard123")
+_LEGACY_API_PASSWORD = os.getenv("API_PASSWORD", "")
+GOVT_API_PASSWORD = os.getenv("GOVT_API_PASSWORD") or _LEGACY_API_PASSWORD or "Govt123"
+FINGUARD_API_PASSWORD = os.getenv("FINGUARD_API_PASSWORD") or _LEGACY_API_PASSWORD or "Finguard123"
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 STORAGE_BUCKET = os.getenv("STORAGE_BUCKET", "documents")
 UPLOAD_PREFIX = os.getenv("UPLOAD_PREFIX", "uploaded_docs")
+RESPONSE_PREFIX = os.getenv("RESPONSE_PREFIX", "response_docs")
 MAX_FILE_SIZE = 2 * 1024 * 1024
 
 if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
