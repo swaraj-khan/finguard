@@ -86,6 +86,19 @@ def upload(
     return UploadResponse(document_id=document_id)
 
 
+@app.get("/files", response_model=list[UUID])
+def list_uploaded_file_ids(_: None = Depends(require_password)) -> list[UUID]:
+    try:
+        document_ids = storage.list_document_ids(prefix=config.UPLOAD_PREFIX)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to list documents from storage: {exc}",
+        ) from exc
+
+    return [UUID(document_id) for document_id in document_ids]
+
+
 @app.get(
     "/files/{document_id}",
     response_class=PlainTextResponse,

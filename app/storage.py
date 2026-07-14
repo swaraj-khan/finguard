@@ -1,4 +1,5 @@
 import uuid
+from uuid import UUID
 
 from . import config
 from .db import get_supabase
@@ -40,3 +41,36 @@ def get_document(document_id: str, prefix: str = "") -> bytes | None:
     if not bucket.exists(key):
         return None
     return bucket.download(key)
+
+
+def list_document_ids(prefix: str = "") -> list[str]:
+    bucket = get_supabase().storage.from_(config.STORAGE_BUCKET)
+    folder = prefix.strip("/")
+    document_ids: list[str] = []
+    limit = 1000
+    offset = 0
+
+    while True:
+        entries = bucket.list(
+            folder,
+            {
+                "limit": limit,
+                "offset": offset,
+                "sortBy": {"column": "name", "order": "asc"},
+            },
+        )
+        for entry in entries:
+            # Uploaded documents are UUID-named folders. Ignore files and any
+            # unrelated folders that might also exist under the prefix.
+            if entry.get("id") is not None:
+                continue
+            try:
+                document_ids.append(str(UUID(entry.get("name", ""))))
+            except (ValueError, AttributeError, TypeError):
+                continue
+
+        if len(entries) < limit:
+            break
+        offset += limit
+
+    return document_ids

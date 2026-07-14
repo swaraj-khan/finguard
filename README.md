@@ -49,6 +49,24 @@ Response (`201 Created`):
 }
 ```
 
+### List all document IDs
+
+`GET /files` returns every stored document ID as a JSON array.
+
+```bash
+curl http://127.0.0.1:8000/files \
+  -H "X-API-Password: Finguard123"
+```
+
+Response (`200 OK`):
+
+```json
+[
+  "34ebbd85-774a-4547-84d7-44f2e8848e9e",
+  "b99ccf84-21dd-4e4c-90de-e11c4f915a1f"
+]
+```
+
 ### Retrieve a specific document
 
 `GET /files/{document_id}` returns the stored value as a pure Base64 `text/plain` response.
