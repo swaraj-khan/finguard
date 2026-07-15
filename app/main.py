@@ -4,10 +4,10 @@ import secrets
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Body, Depends, FastAPI, HTTPException, Query, Security, status
+from fastapi import Body, Depends, FastAPI, HTTPException, Security, status
 from fastapi.responses import PlainTextResponse
 from fastapi.security import APIKeyHeader
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from . import config, storage
 
@@ -29,8 +29,26 @@ class DocumentIdResponse(BaseModel):
     document_id: UUID
 
 
-class GovernmentUploadResponse(DocumentIdResponse):
-    reference: str
+class GovernmentUploadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reference_no: str = Field(min_length=1, max_length=255)
+    doc_name: str = Field(min_length=1, max_length=255)
+    base64: str = Field(min_length=1, description="The raw document as standard Base64.")
+
+    @field_validator("reference_no", "doc_name")
+    @classmethod
+    def normalize_text_fields(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        if any(ord(character) < 32 for character in normalized):
+            raise ValueError("must not contain control characters")
+        return normalized
+
+
+class GovernmentUploadResponse(BaseModel):
+    doc_id: str
 
 
 def _require_team_password(password: str | None, expected: str, team: str) -> None:
@@ -86,26 +104,6 @@ def _encode(contents: bytes) -> str:
     return base64.b64encode(contents).decode("ascii")
 
 
-def _build_reference(bill_number: int, document_name: str) -> tuple[str, str]:
-    normalized_name = document_name.strip()
-    if not normalized_name:
-        raise HTTPException(
-            status_code=422,
-            detail="The document name cannot be blank.",
-        )
-    if "/" in normalized_name or "\\" in normalized_name:
-        raise HTTPException(
-            status_code=422,
-            detail="The document name cannot contain '/' or '\\'.",
-        )
-    if any(ord(character) < 32 for character in normalized_name):
-        raise HTTPException(
-            status_code=422,
-            detail="The document name cannot contain control characters.",
-        )
-    return normalized_name, f"{bill_number}/{normalized_name}"
-
-
 def _get_document(document_id: UUID, prefix: str, version: str) -> bytes:
     try:
         contents = storage.get_document(str(document_id), prefix=prefix)
@@ -155,33 +153,17 @@ def _base64_body(description: str) -> dict:
     tags=["Government"],
 )
 def upload_raw_document(
-    bill_number: Annotated[
-        int,
-        Query(ge=0, description="The government bill number."),
-    ],
-    document_name: Annotated[
-        str,
-        Query(min_length=1, max_length=255, description="The document name used in the reference."),
-    ],
-    payload: Annotated[
-        str,
-        Body(
-            media_type="text/plain",
-            description="A raw document encoded as plain standard Base64 (no data-URL prefix).",
-        ),
-    ],
+    request: GovernmentUploadRequest,
     _: None = Depends(require_govt_password),
 ) -> GovernmentUploadResponse:
-    normalized_name, reference = _build_reference(bill_number, document_name)
-    contents = _decode_payload(payload)
+    contents = _decode_payload(request.base64)
     try:
         document_id = storage.create_document(
             contents,
             prefix=config.UPLOAD_PREFIX,
             metadata={
-                "bill_number": bill_number,
-                "document_name": normalized_name,
-                "reference": reference,
+                "reference_no": request.reference_no,
+                "doc_name": request.doc_name,
             },
         )
     except Exception as exc:
@@ -189,7 +171,7 @@ def upload_raw_document(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to upload the raw document: {exc}",
         ) from exc
-    return GovernmentUploadResponse(document_id=document_id, reference=reference)
+    return GovernmentUploadResponse(doc_id=document_id)
 
 
 @app.get(
