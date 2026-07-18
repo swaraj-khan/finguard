@@ -86,7 +86,7 @@ Response (`200 OK`):
 
 ### GET `/govt/documents/{document_id}/analyzed`
 
-Returns the analyzed version of a document as Base64.
+Returns the structured analysis result for a document.
 
 Headers:
 
@@ -96,10 +96,50 @@ X-API-Password: GOVERNMENT_PASSWORD
 
 Request body: none.
 
-Response (`200 OK`, `text/plain`):
+Response (`200 OK`, `application/json`):
 
-```text
-UFJFUFJPQ0VTU0VEX0RPQ1VNRU5U
+```json
+{
+  "header": {
+    "referenceNo": "20264701",
+    "billType": "Z370",
+    "docId": "b99ccf84-21dd-4e4c-90de-e11c4f915a1f",
+    "processedAt": "2026-07-09T10:15:30.123456",
+    "duplicate": true,
+    "decision": "REJECTED",
+    "reason": "High confidence duplicate (94%) — block payment, initiate investigation",
+    "totalPages": 3,
+    "analysis": {
+      "fieldMatchingScore": 0.94,
+      "aiAnalysisScore": 0.12,
+      "patternAnalysisScore": 0.0,
+      "totalMatchesFound": 1,
+      "matchingMethod": "FinGuard OCR + text similarity + fraud rules"
+    }
+  },
+  "topMatch": {
+    "uploadedReferenceNo": "2026489",
+    "uploadeddocId": "20262437069",
+    "uploadedPageNumber": 1,
+    "matchedReferenceNo": "20261527",
+    "matcheddocId": "20262437069",
+    "matchedPageNumber": 1,
+    "similarityScore": 0.9995,
+    "riskTier": "HIGH"
+  },
+  "otherMatches": [
+    {
+      "uploadedReferenceNo": "2026419",
+      "uploadeddocId": "20262437019",
+      "uploadedPageNumber": 1,
+      "matchedReferenceNo": "20261527",
+      "matcheddocId": "20262437069",
+      "matchedPageNumber": 3,
+      "similarityScore": 0.9334,
+      "riskTier": "HIGH"
+    }
+  ]
+}
 ```
 
 Returns `404` if the analyzed document has not been uploaded yet.
@@ -164,8 +204,10 @@ Content-Type: text/plain
 Request body:
 
 ```text
-UFJFUFJPQ0VTU0VEX0RPQ1VNRU5U
+BASE64_ENCODED_ANALYSIS_JSON
 ```
+
+The decoded value must be a JSON object matching the government analyzed-response format above. Its `header.docId` must match `{document_id}` in the URL.
 
 Response (`201 Created`):
 
@@ -175,4 +217,4 @@ Response (`201 Created`):
 }
 ```
 
-Returns `404` if the original document ID does not exist and `409` if an analyzed version already exists.
+Returns `400` if the decoded analysis JSON is invalid or has a different `header.docId`, `404` if the original document ID does not exist, and `409` if an analyzed version already exists.

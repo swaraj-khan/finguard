@@ -29,9 +29,10 @@ def store_document(
     document_id: str,
     prefix: str,
     metadata: dict | None = None,
+    content_type: str = "application/octet-stream",
 ) -> None:
     key = _document_key(document_id, prefix)
-    file_options = {"content-type": "application/octet-stream", "upsert": "false"}
+    file_options = {"content-type": content_type, "upsert": "false"}
     if metadata:
         file_options["metadata"] = metadata
     get_supabase().storage.from_(config.STORAGE_BUCKET).upload(

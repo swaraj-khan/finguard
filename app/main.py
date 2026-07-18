@@ -1,13 +1,14 @@
 import base64
 import binascii
+import json
 import secrets
+from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Security, status
-from fastapi.responses import PlainTextResponse
 from fastapi.security import APIKeyHeader
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from . import config, storage
 
@@ -55,6 +56,51 @@ class RawDocumentResponse(BaseModel):
     reference_no: str
     doc_name: str
     base64: str
+
+
+class AnalysisScores(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    fieldMatchingScore: float
+    aiAnalysisScore: float
+    patternAnalysisScore: float
+    totalMatchesFound: int
+    matchingMethod: str
+
+
+class AnalysisHeader(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    referenceNo: str
+    billType: str
+    docId: UUID
+    processedAt: datetime
+    duplicate: bool
+    decision: str
+    reason: str
+    totalPages: int
+    analysis: AnalysisScores
+
+
+class AnalysisMatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    uploadedReferenceNo: str
+    uploadeddocId: str
+    uploadedPageNumber: int
+    matchedReferenceNo: str
+    matcheddocId: str
+    matchedPageNumber: int
+    similarityScore: float
+    riskTier: str
+
+
+class AnalysisResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    header: AnalysisHeader
+    topMatch: AnalysisMatch | None
+    otherMatches: list[AnalysisMatch]
 
 
 def _require_team_password(password: str | None, expected: str, team: str) -> None:
@@ -137,19 +183,26 @@ def _document_exists(document_id: UUID, prefix: str) -> bool:
         ) from exc
 
 
-def _base64_body(description: str) -> dict:
-    return {
-        status.HTTP_200_OK: {
-            "content": {
-                "text/plain": {
-                    "schema": {
-                        "type": "string",
-                        "description": description,
-                    }
-                }
-            }
-        }
-    }
+def _parse_analysis(
+    contents: bytes,
+    document_id: UUID,
+    invalid_status: int,
+) -> AnalysisResponse:
+    try:
+        data = json.loads(contents.decode("utf-8"))
+        analysis = AnalysisResponse.model_validate(data)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValidationError) as exc:
+        raise HTTPException(
+            status_code=invalid_status,
+            detail="The analyzed document must contain valid JSON matching the analysis response schema.",
+        ) from exc
+
+    if analysis.header.docId != document_id:
+        raise HTTPException(
+            status_code=invalid_status,
+            detail="The analysis header docId must match the document_id in the endpoint URL.",
+        )
+    return analysis
 
 
 @app.post(
@@ -200,16 +253,15 @@ def list_government_document_ids(
 
 @app.get(
     "/govt/documents/{document_id}/analyzed",
-    response_class=PlainTextResponse,
-    responses=_base64_body("The analyzed document as a standard Base64 string."),
+    response_model=AnalysisResponse,
     tags=["Government"],
 )
 def get_analyzed_document_for_govt(
     document_id: UUID,
     _: None = Depends(require_govt_password),
-) -> PlainTextResponse:
+) -> AnalysisResponse:
     contents = _get_document(document_id, config.RESPONSE_PREFIX, "analyzed")
-    return PlainTextResponse(_encode(contents))
+    return _parse_analysis(contents, document_id, status.HTTP_502_BAD_GATEWAY)
 
 
 @app.get(
@@ -295,8 +347,14 @@ def upload_analyzed_document(
         )
 
     contents = _decode_payload(payload)
+    _parse_analysis(contents, document_id, status.HTTP_400_BAD_REQUEST)
     try:
-        storage.store_document(contents, str(document_id), prefix=config.RESPONSE_PREFIX)
+        storage.store_document(
+            contents,
+            str(document_id),
+            prefix=config.RESPONSE_PREFIX,
+            content_type="application/json",
+        )
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
