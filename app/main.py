@@ -51,6 +51,12 @@ class GovernmentUploadResponse(BaseModel):
     doc_id: str
 
 
+class RawDocumentResponse(BaseModel):
+    reference_no: str
+    doc_name: str
+    base64: str
+
+
 def _require_team_password(password: str | None, expected: str, team: str) -> None:
     if not password or not secrets.compare_digest(password, expected):
         raise HTTPException(
@@ -228,16 +234,36 @@ def list_pending_documents(
 
 @app.get(
     "/finguard/documents/{document_id}/raw",
-    response_class=PlainTextResponse,
-    responses=_base64_body("The raw government document as a standard Base64 string."),
+    response_model=RawDocumentResponse,
     tags=["Finguard"],
 )
 def get_raw_document_for_finguard(
     document_id: UUID,
     _: None = Depends(require_finguard_password),
-) -> PlainTextResponse:
-    contents = _get_document(document_id, config.UPLOAD_PREFIX, "raw")
-    return PlainTextResponse(_encode(contents))
+) -> RawDocumentResponse:
+    try:
+        stored_document = storage.get_document_with_metadata(
+            str(document_id),
+            prefix=config.UPLOAD_PREFIX,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to read the raw document from storage: {exc}",
+        ) from exc
+
+    if stored_document is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"The raw document for '{document_id}' was not found.",
+        )
+
+    contents, metadata = stored_document
+    return RawDocumentResponse(
+        reference_no=str(metadata.get("reference_no") or ""),
+        doc_name=str(metadata.get("doc_name") or ""),
+        base64=_encode(contents),
+    )
 
 
 @app.post(

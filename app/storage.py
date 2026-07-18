@@ -1,3 +1,4 @@
+import json
 import uuid
 from uuid import UUID
 
@@ -57,6 +58,48 @@ def get_document(document_id: str, prefix: str) -> bytes | None:
     if not bucket.exists(key):
         return None
     return bucket.download(key)
+
+
+def _as_metadata_dict(value: object) -> dict:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _extract_custom_metadata(file_info: dict) -> dict:
+    metadata = _as_metadata_dict(file_info.get("metadata"))
+    candidates = (
+        file_info.get("user_metadata"),
+        file_info.get("userMetadata"),
+        metadata.get("user_metadata"),
+        metadata.get("userMetadata"),
+        metadata.get("metadata"),
+        metadata,
+    )
+    for candidate in candidates:
+        candidate_dict = _as_metadata_dict(candidate)
+        if "reference_no" in candidate_dict or "doc_name" in candidate_dict:
+            return candidate_dict
+    return {}
+
+
+def get_document_with_metadata(
+    document_id: str,
+    prefix: str,
+) -> tuple[bytes, dict] | None:
+    key = _document_key(document_id, prefix)
+    bucket = get_supabase().storage.from_(config.STORAGE_BUCKET)
+    if not bucket.exists(key):
+        return None
+    file_info = bucket.info(key)
+    contents = bucket.download(key)
+    return contents, _extract_custom_metadata(file_info)
 
 
 def list_document_ids(prefix: str) -> list[str]:
